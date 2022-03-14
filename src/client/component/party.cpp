@@ -24,6 +24,7 @@ namespace party
 			game::netadr_s host{};
 			std::string challenge{};
 			bool hostDefined{false};
+			int sessionId{};
 		} connect_state;
 
 		std::string sv_motd;
@@ -229,9 +230,15 @@ namespace party
 
 		connect_state.host = target;
 		connect_state.challenge = utils::cryptography::random::get_challenge();
+		connect_state.sessionId = utils::cryptography::random::get_integer();
 		connect_state.hostDefined = true;
 
 		network::send(target, "getInfo", connect_state.challenge);
+	}
+
+	game::netadr_s get_current_server_info()
+	{
+		return connect_state.host;
 	}
 
 	void start_map(const std::string& mapname)

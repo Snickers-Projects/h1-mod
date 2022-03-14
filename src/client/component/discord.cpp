@@ -8,7 +8,10 @@
 #include "network.hpp"
 #include "party.hpp"
 
+#include "steam/steam.hpp"
+
 #include <utils/string.hpp>
+#include <utils/cryptography.hpp>
 
 #include <discord_rpc.h>
 
@@ -21,6 +24,12 @@ namespace discord
 		void update_discord()
 		{
 			Discord_RunCallbacks();
+
+			// make sure these are blank in case we disconnect
+			discord_presence.matchSecret = "";
+			discord_presence.joinSecret = "";
+			discord_presence.partyId = "";
+			discord_presence.state = "";
 
 			if (!game::CL_IsCgameInitialized() || game::VirtualLobby_Loaded())
 			{
@@ -65,10 +74,24 @@ namespace discord
 					discord_presence.partyMax = max_clients;
 					discord_presence.state = clean_hostname;
 					discord_presence.largeImageKey = map;
+					discord_presence.partyPrivacy = DISCORD_PARTY_PUBLIC;
+					
+					// TODO: we need to make this a random string that represents the session ID
+					// discord_presence.partyId = "TEMP";
+					
+					const auto server_net_info = party::get_current_server_info();
+					const auto server_ip_port = utils::string::va("%i.%i.%i.%i:%i",
+						server_net_info.ip[0], server_net_info.ip[1], server_net_info.ip[2], server_net_info.ip[3],
+						ntohs(server_net_info.port));
+
+					console::info("Discord: IP:PORT is %s\n", server_ip_port);
+					const auto ip_port_hash = utils::cryptography::sha1::compute(server_ip_port);
+
+					discord_presence.matchSecret = ip_port_hash.data(); // no clue what this is used for
+					discord_presence.joinSecret = server_ip_port;
 				}
 				else if (game::environment::is_sp())
 				{
-					discord_presence.state = "";
 					discord_presence.largeImageKey = map;
 					discord_presence.details = mapname;
 				}
@@ -99,9 +122,9 @@ namespace discord
 			handlers.ready = ready;
 			handlers.errored = errored;
 			handlers.disconnected = errored;
-			handlers.joinGame = nullptr;
+			handlers.joinGame = joinGame;
 			handlers.spectateGame = nullptr;
-			handlers.joinRequest = nullptr;
+			handlers.joinRequest = joinRequest;
 
 			Discord_Initialize("947125042930667530", &handlers, 1, nullptr);
 
@@ -127,13 +150,13 @@ namespace discord
 	private:
 		bool initialized_ = false;
 
-		static void ready(const DiscordUser* /*request*/)
+		static void ready(const DiscordUser* request)
 		{
 			ZeroMemory(&discord_presence, sizeof(discord_presence));
 
 			discord_presence.instance = 1;
 
-			console::info("Discord: Ready\n");
+			console::info("Discord: Ready on %s (%s)\n", request->username, request->userId);
 
 			Discord_UpdatePresence(&discord_presence);
 		}
@@ -141,6 +164,32 @@ namespace discord
 		static void errored(const int error_code, const char* message)
 		{
 			console::error("Discord: Error (%i): %s\n", error_code, message);
+		}
+
+		static void joinGame(const char* joinSecret)
+		{
+			console::info("Discord: Join game called with join secret: %s\n", joinSecret);
+
+			/*
+				this works perfectly and you are able to join a game through Discord if someone
+				sends a invite. however, we should probably see if we can make this account for
+				when the game starts up, unless this already does it?
+			*/
+			scheduler::once([joinSecret]()
+			{
+				game::netadr_s target{};
+				if (game::NET_StringToAdr(joinSecret, &target))
+				{
+					console::info("Discord: Connecting to server: %s\n", joinSecret);
+					party::connect(target);
+				}
+			}, scheduler::pipeline::main);
+		}
+
+		static void joinRequest(const DiscordUser* request)
+		{
+			console::info("Discord: joinRequest from %s (%s)\n", request->username, request->userId);
+			// Discord_Respond(request->userId, DISCORD_REPLY_YES);
 		}
 	};
 }
